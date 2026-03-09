@@ -8,21 +8,24 @@ import whisper
 import os
 import ffmpeg
 
+os.environ["PATH"] += r";C:\Users\André\ffmpeg\bin"
+
 app = FastAPI()
 
-# rate limiter
+# Rate limit
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
+# modelo whisper
 model = whisper.load_model("base")
 
 MAX_FILE_SIZE = 3 * 1024 * 1024
 MAX_DURATION = 180
 
 
-def get_duration(file):
+def get_audio_duration(file):
     probe = ffmpeg.probe(file)
     return float(probe["format"]["duration"])
 
@@ -33,22 +36,30 @@ async def transcribe(request: Request, file: UploadFile = File(...)):
 
     contents = await file.read()
 
+    # limitar tamanho
     if len(contents) > MAX_FILE_SIZE:
-        raise HTTPException(400, "Arquivo maior que 3MB")
+        raise HTTPException(status_code=400, detail="Arquivo maior que 3MB")
 
-    path = f"/tmp/{file.filename}"
-
+    path = f"temp_{file.filename}"
+    
     with open(path, "wb") as f:
         f.write(contents)
 
-    duration = get_duration(path)
+    # verificar duração
+    duration = get_audio_duration(path)
 
     if duration > MAX_DURATION:
         os.remove(path)
-        raise HTTPException(400, "Áudio maior que 3 minutos")
+        raise HTTPException(status_code=400, detail="Áudio maior que 3 minutos")
 
+    # transcrição
     result = model.transcribe(path)
 
+    # apagar arquivo
     os.remove(path)
 
-    return {"text": result["text"]}
+    return {
+        "filename": file.filename,
+        "duration": duration,
+        "text": result["text"]
+    }
